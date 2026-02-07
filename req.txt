@@ -2,6 +2,9 @@ kagglehub
 pandas
 pyarrow
 fastparquet
+python-dotenv
+langsmith
+langgraph
 langchain
 langchain-chroma
 langchain-openai

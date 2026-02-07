@@ -1,27 +1,36 @@
-from build_index import _download_from_kaggle, _load_dataframe, _df_to_docs, _build_vectorstore
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
-from langchain_core.tools import create_retriever_tool
+"""Retriever tool for searching Docker docs chunks. Loads existing index (no indexing)."""
 
-from langchain_core.tools import create_retriever_tool
-from langchain_openai import OpenAIEmbeddings
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from dotenv import load_dotenv
-load_dotenv()
 
-def get_retriever():
-    df = _load_dataframe()
-    docs = _df_to_docs(df)
-    text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-        chunk_size=400,
-        chunk_overlap=100,
+load_dotenv(override=True)  # przed importem LangChain (LangSmith observability)
+
+from langchain_chroma import Chroma
+from langchain_core.tools import create_retriever_tool
+from langchain_openai import OpenAIEmbeddings
+
+from config import CHROMA_DIR, COLLECTION_NAME, EMBEDDING_MODEL, OPENROUTER_API_KEY, OPENROUTER_BASE_URL
+
+
+def get_retriever(k: int = 4):
+    """Ładuje istniejący indeks Chroma i zwraca retriever. Nie buduje indeksu."""
+    embeddings = OpenAIEmbeddings(
+        model=EMBEDDING_MODEL,
+        api_key=OPENROUTER_API_KEY,
+        base_url=OPENROUTER_BASE_URL,
     )
-    doc_splits = text_splitter.split_documents(docs) if docs else []
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-    vectorstore = _build_vectorstore(doc_splits, embeddings)
-    return vectorstore.as_retriever()
+    vs = Chroma(
+        collection_name=COLLECTION_NAME,
+        embedding_function=embeddings,
+        persist_directory=CHROMA_DIR,
+    )
+    return vs.as_retriever(search_kwargs={"k": k})
 
-if __name__ == "__main__":
+
+def create_docker_docs_tool():
+    """Zwraca LangChain tool do wyszukiwania chunków dokumentacji Docker."""
     retriever = get_retriever()
-    results = retriever.invoke("Jak zainstalować Docker Desktop na Linuxie?")
-    print(results)
+    return create_retriever_tool(
+        retriever,
+        "search_docker_docs",
+        "Wyszukuj fragmenty dokumentacji Docker (instrukcje, API, konfiguracja, opisy).",
+    )
