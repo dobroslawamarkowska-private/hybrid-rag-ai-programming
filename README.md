@@ -61,21 +61,20 @@ Sync forka z repo Marcina **zawsze tylko** do brancha `marcin_main`:
 
 Szczegółowy opis przepływu, diagramy i konfiguracja – zobacz [docs/ADVANCED_RAG.md](docs/ADVANCED_RAG.md).
 
-## Ewaluacja (LangSmith)
+## Ewaluacja (LangSmith, branch langsmith-eval)
 
-Na branchu `langsmith-eval` dostępne są skrypty do ewaluacji RAG:
-
-1. **Tworzenie datasetu testowego** – pytania o dokumentację Docker + oczekiwane słowa kluczowe:
+1. **Tworzenie datasetu** – 8 pytań + expected_keywords + expected_answer:
    ```bash
    python eval_dataset.py
    ```
 
-2. **Uruchomienie ewaluacji** – uruchamia workflow na datasetcie i ocenia wyniki:
+2. **Uruchomienie ewaluacji**:
    ```bash
-   python eval_rag.py
+   python eval_rag.py                    # answer_not_empty, expected_keywords (0 tokenów na eval)
+   python eval_rag.py --llm-judge        # + qa_correctness (LLM-as-judge, dodatkowe wywołania LLM)
    ```
 
-Wymagane: `LANGSMITH_API_KEY` lub `LANGCHAIN_API_KEY` w `.env`. Wyniki w [smith.langchain.com](https://smith.langchain.com).
+Dataset zawiera expected_answer dla wszystkich przykładów. Ewaluacja po keywords jest tańsza (bez dodatkowych LLM); `--llm-judge` daje ocenę semantyczną. Wymagane: `LANGSMITH_API_KEY` w `.env`.
 
 ---
 

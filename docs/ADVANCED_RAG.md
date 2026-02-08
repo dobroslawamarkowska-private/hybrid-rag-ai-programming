@@ -177,7 +177,9 @@ Gdy pytanie **nie występuje** w dokumentacji:
 | `build_index.py` | Budowanie indeksu Chroma (uruchamiane ręcznie). |
 | `retriever.py` | Retriever i tool `create_docker_docs_tool()`. |
 | `workflow.py` | LangGraph workflow: route_query → (generate_direct | pre_retrieval → retrieval → check_and_refine → post_retrieval → generate). |
-| `tests/` | Testy: jednostkowe (workflow, build_index), integracyjne (retriever, ask). `SKIP_INTEGRATION=1` pomija testy wymagające API. |
+| `eval_dataset.py` | Tworzenie datasetu LangSmith (branch langsmith-eval). |
+| `eval_rag.py` | Ewaluacja RAG przez LangSmith Client (branch langsmith-eval). |
+| `tests/` | Testy: jednostkowe (workflow, build_index, eval), integracyjne (retriever, ask). `SKIP_INTEGRATION=1` pomija testy wymagające API. |
 
 ---
 
@@ -235,6 +237,20 @@ Przy włączonym tracingu tracy są wysyłane do [smith.langchain.com](https://s
 
 ---
 
+## Ewaluacja (branch langsmith-eval)
+
+Skrypty `eval_dataset.py` i `eval_rag.py` umożliwiają ewaluację RAG na datasetcie LangSmith:
+
+- **eval_dataset.py** – tworzy dataset "Docker RAG Eval" z 8 pytaniami, expected_keywords i expected_answer.
+- **eval_rag.py** – uruchamia workflow na datasetcie, evaluatory:
+  - `answer_not_empty` – heurystyka (0 tokenów)
+  - `expected_keywords_present` – heurystyka (0 tokenów)
+  - `qa_correctness` – LLM-as-judge, opcja `--llm-judge` (dodatkowe wywołania LLM)
+
+Wyniki eksportowane do LangSmith; można porównać eksperymenty i pobrać CSV.
+
+---
+
 ## Trace mode (opcja uruchomieniowa)
 
 Z flagą `--trace` workflow generuje dwa dokumenty markdown:
@@ -242,8 +258,9 @@ Z flagą `--trace` workflow generuje dwa dokumenty markdown:
 1. **answer.md** – ładna odpowiedź w formacie MD.
 2. **flow_trace.md** – opis krok po kroku przepływu:
    - każdy węzeł (pre_retrieval, retrieval, check_and_refine, post_retrieval, generate),
-   - użyty model,
+   - użyty model (np. openai/gpt-4o, openai/text-embedding-3-small),
    - liczba wywołań API,
+   - szczegóły (np. "Skipped (no docs)" lub "Skipped (retry limit reached, passing to post_retrieval)" dla check_and_refine),
    - podsumowanie wywołań per model.
 
 ```bash
