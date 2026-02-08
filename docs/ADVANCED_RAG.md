@@ -67,6 +67,55 @@ flowchart TB
 
 ---
 
+## Diagram workflow – kolorowy UML (Mermaid)
+
+Diagram aktywności w stylu UML: kolorowe węzły, różne kształty, wyraźne decyzje.
+
+```mermaid
+flowchart TB
+    subgraph input [" 📥 Wejście "]
+        M(("messages<br/>HumanMessage"))
+    end
+
+    subgraph processing [" ⚙️ Pipeline RAG "]
+        INGEST[Ingest<br/>query = messages[-1]]
+        PR[Pre-Retrieval<br/>1–3 expanded queries]
+        R[Retrieval<br/>embedding + vector search]
+        POST[Post-Retrieval<br/>rerank, 6 chunków]
+        SUM[Summarize conversation<br/>messages > 1500 tok.]
+        GEN[Generate<br/>context + summary + msgs]
+    end
+
+    subgraph decision [" ❓ Decyzja "]
+        CR{{"Grader<br/>score 0–1"}}
+    end
+
+    subgraph output [" 📤 Wyjście "]
+        OUT(("answer"))
+    end
+
+    M --> INGEST
+    INGEST --> PR
+    PR --> R
+    R --> CR
+    CR -->|"≥ 0.5 OK"| POST
+    CR -->|"< 0.5 retry (max 1×)"| R
+    POST --> SUM
+    SUM --> GEN
+    GEN --> OUT
+
+    classDef inputStyle fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    classDef processStyle fill:#fff8e1,stroke:#f9a825,stroke-width:2px
+    classDef decisionStyle fill:#fce4ec,stroke:#c2185b,stroke-width:2px
+    classDef outputStyle fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+
+    class M,OUT inputStyle,outputStyle
+    class INGEST,PR,R,POST,SUM,GEN processStyle
+    class CR decisionStyle
+```
+
+---
+
 ## Diagram Mermaid – sekwencja (z retry)
 
 ```mermaid
