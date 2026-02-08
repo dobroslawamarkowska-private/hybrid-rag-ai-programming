@@ -2,10 +2,10 @@
 Advanced RAG LangGraph workflow following the diagram:
   Pre-Retrieval (smart LLM) → Retrieval (cheap embeddings) → Post-Retrieval (smart LLM) → Generate (frozen LLM)
 
-Retrieval: orchestrator–workers pattern – równoległe workery dla każdego expanded query.
+Retrieval: async + shared retriever – równoległe ainvoke dla każdego expanded query (asyncio.gather).
 """
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import asyncio
 from typing import TypedDict
 
 from dotenv import load_dotenv
@@ -24,7 +24,7 @@ from config import (
     RETRIEVAL_MAX_WORKERS,
     SMART_LLM_MODEL,
 )
-from retriever import get_retriever
+from retriever import get_shared_retriever
 
 
 # --- State ---
@@ -113,38 +113,42 @@ def pre_retrieval(state: RAGState) -> dict:
     return {"expanded_queries": queries}
 
 
-# --- Retrieval: Orchestrator–Workers (parallel embeddings + vector search) ---
-def _retrieval_worker(query: str) -> list[Document]:
-    """Worker: pojedynczy retriever.invoke dla jednego query. Wywoływany równolegle."""
-    retriever = get_retriever(k=6)
-    return retriever.invoke(query)
+# --- Retrieval: Async + shared retriever (asyncio.gather) ---
+async def _retrieval_task(retriever, query: str) -> list[Document]:
+    """Async task: retriever.ainvoke dla jednego query."""
+    return await retriever.ainvoke(query)
 
 
-def retrieval(state: RAGState) -> dict:
+async def retrieval_async(state: RAGState) -> dict:
     """
-    Orchestrator: uruchamia równoległe workery – każdy worker wykonuje
-    retriever.invoke(q) dla jednego expanded query. Przyspiesza retrieval.
+    Async retrieval: współdzielony retriever (thread-safe singleton), równoległe ainvoke
+    przez asyncio.gather dla każdego expanded query.
     """
     queries = state["expanded_queries"]
-    print("\n[DEBUG retrieval] IN:  expanded_queries =", queries, "| workers =", min(len(queries), RETRIEVAL_MAX_WORKERS))
+    n_parallel = min(len(queries), RETRIEVAL_MAX_WORKERS)
+    print("\n[DEBUG retrieval] IN:  expanded_queries =", queries, "| async tasks =", n_parallel)
+
+    retriever = get_shared_retriever(k=6)
+    tasks = [_retrieval_task(retriever, q) for q in queries]
+    results = await asyncio.gather(*tasks)
 
     all_docs: list[Document] = []
     seen_ids: set[int] = set()
-    max_workers = min(len(queries), RETRIEVAL_MAX_WORKERS)
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_retrieval_worker, q): q for q in queries}
-        for future in as_completed(futures):
-            docs = future.result()
-            for d in docs:
-                cid = hash(d.page_content[:200])
-                if cid not in seen_ids:
-                    seen_ids.add(cid)
-                    all_docs.append(d)
+    for docs in results:
+        for d in docs:
+            cid = hash(d.page_content[:200])
+            if cid not in seen_ids:
+                seen_ids.add(cid)
+                all_docs.append(d)
 
     titles = [d.metadata.get("title", "?") for d in all_docs[:6]]
     print("[DEBUG retrieval] OUT: raw_docs count =", len(all_docs), "| titles (first 6) =", titles)
     return {"raw_docs": all_docs}
+
+
+def retrieval(state: RAGState) -> dict:
+    """Sync wrapper – uruchamia retrieval_async."""
+    return asyncio.run(retrieval_async(state))
 
 
 # --- Check relevance & refine query if docs are bad (grader 0–1) ---

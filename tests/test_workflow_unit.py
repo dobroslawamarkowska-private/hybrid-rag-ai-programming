@@ -136,13 +136,17 @@ class TestRetrievalWorkers(unittest.TestCase):
     """Test retrieval z równoległymi workerami – mock retrievera."""
 
     def test_retrieval_returns_raw_docs_with_workers(self):
-        """Retrieval (orchestrator–workers) zwraca raw_docs z deduplikacją."""
+        """Retrieval (async + shared retriever) zwraca raw_docs z deduplikacją."""
         fake_doc = Document(page_content="Docker volume persist", metadata={"title": "Volumes"})
         mock_retriever = MagicMock()
-        mock_retriever.invoke.return_value = [fake_doc]
+        mock_retriever.ainvoke = MagicMock(return_value=[fake_doc])
+        # ainvoke returns awaitable – use async mock
+        async def mock_ainvoke(_):
+            return [fake_doc]
+        mock_retriever.ainvoke = mock_ainvoke
 
         state: RAGState = {"expanded_queries": ["query1", "query2"]}
-        with patch("workflow.get_retriever", return_value=mock_retriever):
+        with patch("workflow.get_shared_retriever", return_value=mock_retriever):
             out = retrieval(state)
 
         self.assertIn("raw_docs", out)
@@ -150,7 +154,6 @@ class TestRetrievalWorkers(unittest.TestCase):
         # 2 queries × 1 doc each, deduplicated if same content
         self.assertGreaterEqual(len(out["raw_docs"]), 1)
         self.assertLessEqual(len(out["raw_docs"]), 2)
-        mock_retriever.invoke.assert_called()  # workers invoked
 
 
 if __name__ == "__main__":

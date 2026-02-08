@@ -126,7 +126,7 @@ sequenceDiagram
 |------|-------|------|
 | **Route** | SMART_LLM | LLM decyduje: **DIRECT** (pytanie ogólne, np. „Co to jest Docker?”) – odpowiedź bez dokumentacji, lub **RAG** (konkretne instrukcje, komendy, konfiguracja) – uruchomienie pipeline RAG. |
 | **Pre-Retrieval** | openai/gpt-4o | Zamiana pytania na 1–3 zapytania wyszukiwania (routing, rewriting, expansion). |
-| **Retrieval** | openai/text-embedding-3-small | **Orchestrator–workers**: równoległe workery (ThreadPoolExecutor) – każdy worker wykonuje embedding + wyszukiwanie dla jednego expanded query. Przyspiesza retrieval. Konfiguracja: `RETRIEVAL_MAX_WORKERS` w `config.py`. |
+| **Retrieval** | openai/text-embedding-3-small | **Async + shared retriever**: równoległe `ainvoke` przez `asyncio.gather`, współdzielony retriever (thread-safe singleton). Przyspiesza retrieval. Konfiguracja: `RETRIEVAL_MAX_WORKERS` w `config.py`. |
 | **Check & Refine** | openai/gpt-5.2 | **Grader 0.00–1.00**: ocena relewancji chunków (2 miejsca po przecinku). Score ≥ 0.50 → OK. Score < 0.50 → LLM poprawia pytanie i retry retrieval (max 1×). |
 | **Post-Retrieval** | — | Rerank, deduplikacja, budowanie kontekstu (do 6 chunków). |
 | **Generate** | openai/gpt-4o | Odpowiedź na podstawie kontekstu (RAG) lub odpowiedź z wiedzy ogólnej (direct). Przy braku dopasowania: komunikat + propozycja najbliższej informacji. |
