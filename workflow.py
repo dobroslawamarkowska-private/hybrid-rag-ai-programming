@@ -13,13 +13,19 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 
-from config import OPENROUTER_API_KEY, OPENROUTER_BASE_URL, SMART_LLM_MODEL
+from config import (
+    GRADER_LLM_MODEL,
+    OPENROUTER_API_KEY,
+    OPENROUTER_BASE_URL,
+    SMART_LLM_MODEL,
+)
 from retriever import get_retriever
 
 
 # --- State ---
 class RAGState(TypedDict, total=False):
     query: str
+    route: str  # "direct" | "rag"
     expanded_queries: list[str]
     raw_docs: list
     reranked_docs: list
@@ -36,6 +42,47 @@ def _get_smart_llm():
         api_key=OPENROUTER_API_KEY,
         base_url=OPENROUTER_BASE_URL,
     )
+
+
+def _get_grader_llm():
+    """LLM do gradera (Check & Refine) – lepszy model do oceny relewancji."""
+    return ChatOpenAI(
+        model=GRADER_LLM_MODEL,
+        temperature=0,
+        api_key=OPENROUTER_API_KEY,
+        base_url=OPENROUTER_BASE_URL,
+    )
+
+
+# --- Route: direct answer vs RAG ---
+ROUTE_PROMPT = """Decide whether this question needs Docker documentation search or can be answered from general knowledge.
+
+Answer DIRECT if: the question is general (e.g. "What is Docker?", "Co to jest kontener?"), introductory, or about basic concepts.
+Answer RAG if: the question asks for specific instructions, commands, configuration, API details, step-by-step guides, or anything that requires looking up documentation.
+
+Question: {query}
+
+Reply with exactly one word: DIRECT or RAG"""
+
+
+def route_query(state: RAGState) -> dict:
+    """LLM decides: answer directly (no retrieval) or run RAG pipeline."""
+    query = state["query"]
+    print("\n[DEBUG route_query] IN:  query =", repr(query))
+    llm = _get_smart_llm()
+    prompt = ChatPromptTemplate.from_messages([("human", ROUTE_PROMPT)])
+    chain = prompt | llm
+    response = chain.invoke({"query": query})
+    route = "rag"
+    if response.content and "direct" in response.content.strip().lower():
+        route = "direct"
+    print("[DEBUG route_query] OUT: route =", route)
+    return {"route": route}
+
+
+def _route_to_direct_or_rag(state: RAGState) -> str:
+    """Route to direct answer or RAG pipeline."""
+    return "generate_direct" if state.get("route") == "direct" else "pre_retrieval"
 
 
 # --- Pre-Retrieval: Query Routing, Rewriting, Expansion ---
@@ -137,7 +184,7 @@ def check_and_refine_query(state: RAGState) -> dict:
     chunk_preview = "\n".join(
         f"- {d.metadata.get('title', '?')}: {d.page_content[:80]}..." for d in raw_docs[:3]
     )
-    llm = _get_smart_llm()
+    llm = _get_grader_llm()
     prompt = ChatPromptTemplate.from_messages([("human", CHECK_AND_REFINE_PROMPT)])
     chain = prompt | llm
     response = chain.invoke({"query": query, "chunk_preview": chunk_preview})

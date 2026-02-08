@@ -16,5 +16,7 @@ OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.
 # Modele DeepSeek – format OpenRouter: provider/model
 # LLM: deepseek-chat lub deepseek-v3 / deepseek-v3.2
 SMART_LLM_MODEL = "deepseek/deepseek-chat"
+# Grader (Check & Refine): ocena relewancji chunków – model z lepszą analizą
+GRADER_LLM_MODEL = "deepseek/deepseek-v3.2-speciale"
 # Embeddingi: OpenAI działa przez OpenRouter. Qwen3-embedding powodował "No embedding data received".
 EMBEDDING_MODEL = "openai/text-embedding-3-small"

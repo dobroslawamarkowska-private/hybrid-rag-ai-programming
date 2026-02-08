@@ -1,6 +1,6 @@
 # Hybrid RAG – AI Programming
 
-Advanced RAG (Retrieval Augmented Generation) pipeline dla dokumentacji Docker. Zbudowany w **LangGraph** z etapami: pre-retrieval, retrieval, grader + refinement, post-retrieval, generate.
+Advanced RAG (Retrieval Augmented Generation) pipeline dla dokumentacji Docker. Zbudowany w **LangGraph** z etapami: route (direct vs RAG), pre-retrieval, retrieval, grader + refinement, post-retrieval, generate.
 
 ## Wymagania
 
