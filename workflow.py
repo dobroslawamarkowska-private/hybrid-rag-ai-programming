@@ -15,9 +15,13 @@ from dotenv import load_dotenv
 load_dotenv(override=True)  # przed importem LangChain (LangSmith observability)
 
 from langchain_core.documents import Document
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages.utils import count_tokens_approximately, trim_messages
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
 
 from config import (
     EMBEDDING_MODEL,
@@ -31,6 +35,8 @@ from retriever import get_retriever
 
 
 # --- State ---
+MAX_CONTENT_TOKENS = 4096  # max tokenów dla rozmowy (Summarize messages pattern)
+
 class RAGState(TypedDict, total=False):
     query: str
     route: str  # "direct" | "rag"
@@ -42,6 +48,7 @@ class RAGState(TypedDict, total=False):
     retrieval_attempt: int
     trace: bool
     flow_log: Annotated[list[dict], operator.add]
+    messages: Annotated[list, add_messages]
 
 
 # --- Models ---
@@ -100,6 +107,16 @@ def route_query(state: RAGState) -> dict:
 def _route_to_direct_or_rag(state: RAGState) -> str:
     """Route to direct answer or RAG pipeline."""
     return "generate_direct" if state.get("route") == "direct" else "pre_retrieval"
+
+
+def ingest(state: RAGState) -> dict:
+    """Pobierz query z ostatniej wiadomości użytkownika."""
+    messages = state.get("messages") or []
+    if messages:
+        last = messages[-1]
+        if isinstance(last, HumanMessage) and hasattr(last, "content"):
+            return {"query": last.content if isinstance(last.content, str) else str(last.content)}
+    return {"query": state.get("query", "")}
 
 
 # --- Pre-Retrieval: Query Routing, Rewriting, Expansion ---
@@ -265,31 +282,36 @@ def post_retrieval(state: RAGState) -> dict:
     return out
 
 
-# --- Generate: Frozen LLM ---
-GENERATE_PROMPT = """You are a helpful Docker documentation assistant. Answer the user's question based ONLY on the provided context.
+# --- Generate: Frozen LLM (Summarize messages: max 4096 tokenów) ---
+GENERATE_SYSTEM = """You are a helpful Docker documentation assistant. Answer the user's question based ONLY on the provided context.
 
 If the context does NOT contain the exact information asked for:
 1. Clearly state that such information is not in the documentation.
 2. Suggest the closest related information from the context (e.g. "Najbliższa propozycja:" / "The closest match:").
 
-If the context contains relevant information, answer concisely and technically.
-
-Context:
-{context}
-
-User question: {query}
-
-Answer:"""
+If the context contains relevant information, answer concisely and technically."""
 
 
 def generate(state: RAGState) -> dict:
-    """Generate final answer using frozen smart LLM."""
+    """Generate final answer. Trims context + messages to MAX_CONTENT_TOKENS (Summarize messages)."""
     llm = _get_smart_llm()
-    prompt = ChatPromptTemplate.from_messages([("human", GENERATE_PROMPT)])
-    chain = prompt | llm
-    response = chain.invoke({"context": state["context"], "query": state["query"]})
-    out = {"answer": response.content}
-    out.update(_log(state, "generate", SMART_LLM_MODEL, 1, "Final answer generation"))
+    context = state.get("context", "")
+    messages = state.get("messages") or []
+
+    system_content = f"{GENERATE_SYSTEM}\n\nContext:\n{context}"
+    full_messages = [SystemMessage(content=system_content), *messages]
+    trimmed = trim_messages(
+        full_messages,
+        strategy="last",
+        token_counter=count_tokens_approximately,
+        max_tokens=MAX_CONTENT_TOKENS,
+        start_on="human",
+        end_on=("human", "ai"),
+        include_system=True,
+    )
+    response = llm.invoke(trimmed)
+    out = {"answer": response.content, "messages": [response]}
+    out.update(_log(state, "generate", SMART_LLM_MODEL, 1, f"Final answer (trimmed to {MAX_CONTENT_TOKENS} tokens)"))
     return out
 
 
@@ -297,20 +319,23 @@ def generate(state: RAGState) -> dict:
 def build_rag_graph():
     builder = StateGraph(RAGState)
 
+    builder.add_node("ingest", ingest)
     builder.add_node("pre_retrieval", pre_retrieval)
     builder.add_node("retrieval", retrieval)
     builder.add_node("check_and_refine", check_and_refine_query)
     builder.add_node("post_retrieval", post_retrieval)
     builder.add_node("generate", generate)
 
-    builder.add_edge(START, "pre_retrieval")
+    builder.add_edge(START, "ingest")
+    builder.add_edge("ingest", "pre_retrieval")
     builder.add_edge("pre_retrieval", "retrieval")
     builder.add_edge("retrieval", "check_and_refine")
     builder.add_conditional_edges("check_and_refine", _route_after_check, ["retrieval", "post_retrieval"])
     builder.add_edge("post_retrieval", "generate")
     builder.add_edge("generate", END)
 
-    return builder.compile()
+    checkpointer = InMemorySaver()
+    return builder.compile(checkpointer=checkpointer)
 
 
 # --- Entry point ---
@@ -369,16 +394,18 @@ def _format_flow_trace_md(query: str, flow_log: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def ask(query: str, trace: bool = False) -> str | tuple[str, str]:
+def ask(query: str, trace: bool = False, thread_id: str = "default") -> str | tuple[str, str]:
     """
     Run the RAG workflow and return the answer.
     When trace=True, returns (answer_md, flow_trace_md) – two markdown documents.
+    thread_id: dla pamięci rozmowy (Summarize messages, max 4096 tokenów).
     """
     graph = get_rag_graph()
-    initial_state: RAGState = {"query": query, "trace": trace}
+    initial_state: RAGState = {"messages": [HumanMessage(content=query)], "trace": trace}
     if trace:
         initial_state["flow_log"] = []
-    result = graph.invoke(initial_state)
+    config = {"configurable": {"thread_id": thread_id}}
+    result = graph.invoke(initial_state, config)
     answer = result.get("answer", "")
 
     if not trace:
