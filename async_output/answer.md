@@ -1,25 +1,42 @@
 # Answer
 
-**Query:** How can I persist data in Docker containers?
+**Query:** How to install Docker Hub on Linux?
 
 ---
 
-To persist data in Docker containers, you can use Docker volumes. A Docker volume allows you to store data outside the container's writable layer, ensuring that your data survives container restarts and removals. Here’s how you can attach a volume to your container:
+The context does not provide specific instructions for signing in to Docker Hub, but it does provide installation instructions for Docker Engine on Ubuntu and Debian. Here is how you can install Docker Engine on these distributions:
 
-1. Use the `-v` option with your `docker run` command to specify a volume name and the path where the data should be stored inside the container. If the volume doesn't exist, Docker will automatically create it for you.
-
-   Example command:
-   ```console
-   $ docker run --name my-mysql -e MYSQL_ROOT_PASSWORD=my-secret-pw -e MYSQL_DATABASE=mydb -v my-db-volume:/var/lib/mysql -d mysql:latest
+### For Ubuntu:
+1. **Set up Docker's `apt` repository:**
+   ```bash
+   sudo apt-get update
+   sudo apt-get install ca-certificates curl
+   sudo install -m 0755 -d /etc/apt/keyrings
+   sudo curl -fsSL {{% param "download-url-base" %}}/gpg -o /etc/apt/keyrings/docker.asc
+   sudo chmod a+r /etc/apt/keyrings/docker.asc
+   echo \
+     "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] {{% param "download-url-base" %}} \
+     $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
+     sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+   sudo apt-get update
    ```
 
-2. To verify that the data persists, you can stop and remove the container, then start a new container using the same volume. The data should still be available.
+2. **Install Docker packages:**
+   Follow the instructions to install the latest version of Docker Engine.
 
-Additionally, you can inspect the volume to see where Docker is storing your data using the `docker volume inspect` command.
+3. **Verify installation:**
+   ```bash
+   sudo docker run hello-world
+   ```
 
-Example command:
-```console
-$ docker volume inspect todo-db
+### For Debian:
+1. **Install from a package:**
+   - Download the necessary `.deb` files for Docker Engine, CLI, containerd, and Docker Compose from the Docker repository.
+   - Install the downloaded `.deb` packages.
+
+### Signing in to Docker Hub:
+The context does not provide specific instructions for signing in to Docker Hub. However, typically you can sign in using the Docker CLI with the following command:
+```bash
+docker login
 ```
-
-This will show you details about the volume, including the mount point on the host system.
+You will be prompted to enter your Docker Hub username and password. Once signed in, you can pull and push images using Docker commands.
