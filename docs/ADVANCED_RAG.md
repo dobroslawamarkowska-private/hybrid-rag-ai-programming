@@ -125,11 +125,11 @@ sequenceDiagram
 | Etap | Model | Opis |
 |------|-------|------|
 | **Route** | SMART_LLM | LLM decyduje: **DIRECT** (pytanie ogólne, np. „Co to jest Docker?”) – odpowiedź bez dokumentacji, lub **RAG** (konkretne instrukcje, komendy, konfiguracja) – uruchomienie pipeline RAG. |
-| **Pre-Retrieval** | deepseek/deepseek-chat | Zamiana pytania na 1–3 zapytania wyszukiwania (routing, rewriting, expansion). |
-| **Retrieval** | openai/text-embedding-3-small | Embeddingi + wyszukiwanie wektorowe w Chroma (przez OpenRouter). |
-| **Check & Refine** | deepseek/deepseek-v3.2-speciale | **Grader 1–5**: ocena relewancji chunków. Score ≥ 3 → OK. Score < 3 → LLM poprawia pytanie (intencja, kontekst, wieloznaczność) i retry retrieval (max 1×). |
+| **Pre-Retrieval** | openai/gpt-4o | Zamiana pytania na 1–3 zapytania wyszukiwania (routing, rewriting, expansion). |
+| **Retrieval** | openai/text-embedding-3-small | **Orchestrator–workers**: równoległe workery (ThreadPoolExecutor) – każdy worker wykonuje embedding + wyszukiwanie dla jednego expanded query. Przyspiesza retrieval. Konfiguracja: `RETRIEVAL_MAX_WORKERS` w `config.py`. |
+| **Check & Refine** | openai/gpt-5.2 | **Grader 0.00–1.00**: ocena relewancji chunków (2 miejsca po przecinku). Score ≥ 0.50 → OK. Score < 0.50 → LLM poprawia pytanie i retry retrieval (max 1×). |
 | **Post-Retrieval** | — | Rerank, deduplikacja, budowanie kontekstu (do 6 chunków). |
-| **Generate** | deepseek/deepseek-chat | Odpowiedź na podstawie kontekstu (RAG) lub odpowiedź z wiedzy ogólnej (direct). Przy braku dopasowania: komunikat + propozycja najbliższej informacji. |
+| **Generate** | openai/gpt-4o | Odpowiedź na podstawie kontekstu (RAG) lub odpowiedź z wiedzy ogólnej (direct). Przy braku dopasowania: komunikat + propozycja najbliższej informacji. |
 
 ---
 
@@ -140,7 +140,7 @@ Na początku pipeline LLM ocenia, czy pytanie wymaga dokumentacji:
 - **DIRECT** – pytania ogólne, wprowadzające, o podstawowe koncepty (np. „Co to jest kontener?”, „What is Docker?”). Odpowiedź z wiedzy ogólnej bez wyszukiwania w dokumentacji.
 - **RAG** – pytania o konkretne instrukcje, komendy, konfigurację, API, przewodniki krok po kroku. Uruchamiany jest pełny pipeline RAG (pre-retrieval → retrieval → … → generate).
 
-LLM: DeepSeek. Embeddingi: OpenAI (Qwen3-embedding przez OpenRouter powodował błąd). Można zmieniać modele w `config.py`.
+LLM: OpenAI (gpt-4o, gpt-5.2 dla gradera). Embeddingi: OpenAI (Qwen3-embedding przez OpenRouter powodował błąd). Można zmieniać modele w `config.py`.
 
 **Uwaga:** Zmiana modelu embedding wymaga przebudowy indeksu: `REBUILD_INDEX=1 python build_index.py`.
 
@@ -152,11 +152,11 @@ Decyzja o jakości dokumentów:
 
 1. **Wejście**: `query`, pierwsze 3 chunki (tytuł + 80 znaków treści).
 2. **LLM zwraca**:
-   - `SCORE: 1–5` (1 = zupełnie nieistotne, 5 = idealnie istotne),
-   - `REFINED:` – poprawione pytanie (gdy score < 3) lub oryginał (gdy ≥ 3).
-3. **Próg** `RELEVANCE_THRESHOLD = 3`:
-   - score ≥ 3 → dalej do post_retrieval,
-   - score < 3 → retry retrieval z refined query (max 1 retry).
+   - `SCORE: 0.00–1.00` (0.00 = zupełnie nieistotne, 1.00 = idealnie istotne, 2 miejsca po przecinku),
+   - `REFINED:` – poprawione pytanie (gdy score < 0.50) lub oryginał (gdy ≥ 0.50).
+3. **Próg** `RELEVANCE_THRESHOLD = 0.5`:
+   - score ≥ 0.50 → dalej do post_retrieval,
+   - score < 0.50 → retry retrieval z refined query (max 1 retry).
 
 ---
 
@@ -173,7 +173,7 @@ Gdy pytanie **nie występuje** w dokumentacji:
 
 | Plik | Odpowiedzialność |
 |------|------------------|
-| `config.py` | Stałe: CHROMA_DIR, COLLECTION_NAME, OPENROUTER_*, modele (EMBEDDING_MODEL, SMART_LLM_MODEL, GRADER_LLM_MODEL). |
+| `config.py` | Stałe: CHROMA_DIR, COLLECTION_NAME, OPENROUTER_*, modele, RETRIEVAL_MAX_WORKERS (liczba równoległych retrieval workers). |
 | `build_index.py` | Budowanie indeksu Chroma (uruchamiane ręcznie). |
 | `retriever.py` | Retriever i tool `create_docker_docs_tool()`. |
 | `workflow.py` | LangGraph workflow: route_query → (generate_direct | pre_retrieval → retrieval → check_and_refine → post_retrieval → generate). |

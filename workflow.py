@@ -1,14 +1,18 @@
 """
 Advanced RAG LangGraph workflow following the diagram:
   Pre-Retrieval (smart LLM) → Retrieval (cheap embeddings) → Post-Retrieval (smart LLM) → Generate (frozen LLM)
+
+Retrieval: orchestrator–workers pattern – równoległe workery dla każdego expanded query.
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TypedDict
 
 from dotenv import load_dotenv
 
 load_dotenv(override=True)  # przed importem LangChain (LangSmith observability)
 
+from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
@@ -17,6 +21,7 @@ from config import (
     GRADER_LLM_MODEL,
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
+    RETRIEVAL_MAX_WORKERS,
     SMART_LLM_MODEL,
 )
 from retriever import get_retriever
@@ -108,28 +113,42 @@ def pre_retrieval(state: RAGState) -> dict:
     return {"expanded_queries": queries}
 
 
-# --- Retrieval: Vector search (cheap embeddings) ---
-def retrieval(state: RAGState) -> dict:
-    """Retrieve docs using vector search (cheap embedding model)."""
-    print("\n[DEBUG retrieval] IN:  expanded_queries =", state["expanded_queries"])
+# --- Retrieval: Orchestrator–Workers (parallel embeddings + vector search) ---
+def _retrieval_worker(query: str) -> list[Document]:
+    """Worker: pojedynczy retriever.invoke dla jednego query. Wywoływany równolegle."""
     retriever = get_retriever(k=6)
-    all_docs = []
-    seen_ids = set()
-    for q in state["expanded_queries"]:
-        docs = retriever.invoke(q)
-        for d in docs:
-            # Dedupe by content hash
-            cid = hash(d.page_content[:200])
-            if cid not in seen_ids:
-                seen_ids.add(cid)
-                all_docs.append(d)
+    return retriever.invoke(query)
+
+
+def retrieval(state: RAGState) -> dict:
+    """
+    Orchestrator: uruchamia równoległe workery – każdy worker wykonuje
+    retriever.invoke(q) dla jednego expanded query. Przyspiesza retrieval.
+    """
+    queries = state["expanded_queries"]
+    print("\n[DEBUG retrieval] IN:  expanded_queries =", queries, "| workers =", min(len(queries), RETRIEVAL_MAX_WORKERS))
+
+    all_docs: list[Document] = []
+    seen_ids: set[int] = set()
+    max_workers = min(len(queries), RETRIEVAL_MAX_WORKERS)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_retrieval_worker, q): q for q in queries}
+        for future in as_completed(futures):
+            docs = future.result()
+            for d in docs:
+                cid = hash(d.page_content[:200])
+                if cid not in seen_ids:
+                    seen_ids.add(cid)
+                    all_docs.append(d)
+
     titles = [d.metadata.get("title", "?") for d in all_docs[:6]]
     print("[DEBUG retrieval] OUT: raw_docs count =", len(all_docs), "| titles (first 6) =", titles)
     return {"raw_docs": all_docs}
 
 
-# --- Check relevance & refine query if docs are bad (grader 1–5) ---
-RELEVANCE_THRESHOLD = 3  # score >= 3 → docs ok; score < 3 → refine
+# --- Check relevance & refine query if docs are bad (grader 0–1) ---
+RELEVANCE_THRESHOLD = 0.5  # score >= 0.5 → docs ok; score < 0.5 → refine
 
 CHECK_AND_REFINE_PROMPT = """You are a grader evaluating whether retrieved Docker documentation chunks are relevant to the user's question.
 
@@ -139,30 +158,31 @@ First 3 retrieved chunk titles (preview):
 {chunk_preview}
 
 Answer in exactly 2 lines:
-1. SCORE: a number from 1 to 5 (1=completely irrelevant, 5=perfectly relevant)
-2. REFINED: if SCORE < 3, write an improved question that:
+1. SCORE: a number from 0.00 to 1.00 (0.00=completely irrelevant, 1.00=perfectly relevant), exactly 2 decimal places
+2. REFINED: if SCORE < 0.50, write an improved question that:
    - clarifies the user's intent
    - adds missing context
    - removes ambiguity
    - specifies attributes/details
-   If SCORE >= 3, write the original question unchanged.
+   If SCORE >= 0.50, write the original question unchanged.
 
 Example format:
-SCORE: 2
+SCORE: 0.35
 REFINED: How to install Docker Engine on Ubuntu Linux step by step?"""
 
 
-def _parse_grader_response(response_text: str) -> tuple[int, str]:
-    """Parse SCORE (1-5) and REFINED from LLM response. Returns (score, refined_query)."""
+def _parse_grader_response(response_text: str) -> tuple[float, str]:
+    """Parse SCORE (0.00–1.00) and REFINED from LLM response. Returns (score, refined_query)."""
     lines = response_text.strip().split("\n")
-    score = 3  # default: pass
+    score = 0.5  # default: pass
     refined = ""
     for line in lines:
         line_upper = line.strip().upper()
         if line_upper.startswith("SCORE:"):
             try:
-                num = int(line.split(":", 1)[1].strip().strip("."))
-                score = max(1, min(5, num))
+                raw = line.split(":", 1)[1].strip().strip(".")
+                num = float(raw.replace(",", "."))
+                score = round(max(0.0, min(1.0, num)), 2)
             except (ValueError, IndexError):
                 pass
         elif line_upper.startswith("REFINED:"):
@@ -171,7 +191,7 @@ def _parse_grader_response(response_text: str) -> tuple[int, str]:
 
 
 def check_and_refine_query(state: RAGState) -> dict:
-    """Grader 1-5: if score < threshold, LLM refines the query."""
+    """Grader 0–1: if score < threshold, LLM refines the query."""
     raw_docs = state.get("raw_docs", [])
     query = state["query"]
     attempt = state.get("retrieval_attempt", 0)

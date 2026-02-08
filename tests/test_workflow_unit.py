@@ -3,6 +3,7 @@
 import os
 import sys
 import unittest
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -12,61 +13,62 @@ from workflow import (
     _parse_grader_response,
     _route_after_check,
     post_retrieval,
+    retrieval,
     RAGState,
     RELEVANCE_THRESHOLD,
 )
 
 
 class TestParseGraderResponse(unittest.TestCase):
-    """Test parsowania odpowiedzi gradera (SCORE, REFINED)."""
+    """Test parsowania odpowiedzi gradera (SCORE 0.00–1.00, REFINED)."""
 
     def test_valid_score_and_refined(self):
-        text = "SCORE: 4\nREFINED: How to install Docker on Ubuntu?"
+        text = "SCORE: 0.75\nREFINED: How to install Docker on Ubuntu?"
         score, refined = _parse_grader_response(text)
-        self.assertEqual(score, 4)
+        self.assertEqual(score, 0.75)
         self.assertEqual(refined, "How to install Docker on Ubuntu?")
 
     def test_score_below_threshold_with_refined(self):
-        text = "SCORE: 2\nREFINED: Step-by-step Docker Engine installation for Linux"
+        text = "SCORE: 0.35\nREFINED: Step-by-step Docker Engine installation for Linux"
         score, refined = _parse_grader_response(text)
-        self.assertEqual(score, 2)
+        self.assertEqual(score, 0.35)
         self.assertIn("Docker", refined)
 
-    def test_score_1_min(self):
-        text = "SCORE: 1\nREFINED: original question"
+    def test_score_0_min(self):
+        text = "SCORE: 0.00\nREFINED: original question"
         score, _ = _parse_grader_response(text)
-        self.assertEqual(score, 1)
+        self.assertEqual(score, 0.0)
 
-    def test_score_5_max(self):
-        text = "SCORE: 5\nREFINED: unchanged"
+    def test_score_1_max(self):
+        text = "SCORE: 1.00\nREFINED: unchanged"
         score, _ = _parse_grader_response(text)
-        self.assertEqual(score, 5)
+        self.assertEqual(score, 1.0)
 
     def test_score_out_of_range_clamped(self):
-        score_0, _ = _parse_grader_response("SCORE: 0\nREFINED: x")
-        score_99, _ = _parse_grader_response("SCORE: 99\nREFINED: x")
-        self.assertEqual(score_0, 1)
-        self.assertEqual(score_99, 5)
+        score_neg, _ = _parse_grader_response("SCORE: -0.5\nREFINED: x")
+        score_over, _ = _parse_grader_response("SCORE: 1.5\nREFINED: x")
+        self.assertEqual(score_neg, 0.0)
+        self.assertEqual(score_over, 1.0)
 
-    def test_malformed_score_defaults_to_3(self):
+    def test_malformed_score_defaults_to_pass(self):
         score, _ = _parse_grader_response("SCORE: abc\nREFINED: x")
-        self.assertEqual(score, 3)
+        self.assertEqual(score, 0.5)
 
     def test_no_score_defaults_to_pass(self):
         score, refined = _parse_grader_response("Some random text\nREFINED: q")
-        self.assertEqual(score, 3)
+        self.assertEqual(score, 0.5)
         self.assertEqual(refined, "q")
 
     def test_order_reversed_refined_first(self):
-        text = "REFINED: improved query\nSCORE: 2"
+        text = "REFINED: improved query\nSCORE: 0.42"
         score, refined = _parse_grader_response(text)
-        self.assertEqual(score, 2)
+        self.assertEqual(score, 0.42)
         self.assertEqual(refined, "improved query")
 
     def test_empty_lines_ignored(self):
-        text = "\nSCORE: 3\n\nREFINED:   trimmed  \n\n"
+        text = "\nSCORE: 0.60\n\nREFINED:   trimmed  \n\n"
         score, refined = _parse_grader_response(text)
-        self.assertEqual(score, 3)
+        self.assertEqual(score, 0.6)
         self.assertEqual(refined, "trimmed")
 
 
@@ -126,8 +128,29 @@ class TestPostRetrieval(unittest.TestCase):
 class TestRelevanceThreshold(unittest.TestCase):
     """Stałe workflow."""
 
-    def test_threshold_is_3(self):
-        self.assertEqual(RELEVANCE_THRESHOLD, 3)
+    def test_threshold_is_0_5(self):
+        self.assertEqual(RELEVANCE_THRESHOLD, 0.5)
+
+
+class TestRetrievalWorkers(unittest.TestCase):
+    """Test retrieval z równoległymi workerami – mock retrievera."""
+
+    def test_retrieval_returns_raw_docs_with_workers(self):
+        """Retrieval (orchestrator–workers) zwraca raw_docs z deduplikacją."""
+        fake_doc = Document(page_content="Docker volume persist", metadata={"title": "Volumes"})
+        mock_retriever = MagicMock()
+        mock_retriever.invoke.return_value = [fake_doc]
+
+        state: RAGState = {"expanded_queries": ["query1", "query2"]}
+        with patch("workflow.get_retriever", return_value=mock_retriever):
+            out = retrieval(state)
+
+        self.assertIn("raw_docs", out)
+        self.assertIsInstance(out["raw_docs"], list)
+        # 2 queries × 1 doc each, deduplicated if same content
+        self.assertGreaterEqual(len(out["raw_docs"]), 1)
+        self.assertLessEqual(len(out["raw_docs"]), 2)
+        mock_retriever.invoke.assert_called()  # workers invoked
 
 
 if __name__ == "__main__":
