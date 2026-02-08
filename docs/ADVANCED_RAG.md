@@ -235,6 +235,25 @@ Przy włączonym tracingu tracy są wysyłane do [smith.langchain.com](https://s
 
 ---
 
+## Trace mode (opcja uruchomieniowa)
+
+Z flagą `--trace` workflow generuje dwa dokumenty markdown:
+
+1. **answer.md** – ładna odpowiedź w formacie MD.
+2. **flow_trace.md** – opis krok po kroku przepływu:
+   - każdy węzeł (pre_retrieval, retrieval, check_and_refine, post_retrieval, generate),
+   - użyty model,
+   - liczba wywołań API,
+   - podsumowanie wywołań per model.
+
+```bash
+python workflow.py --trace -q "Jak zainstalować Docker?" -o ./output
+```
+
+Programowo: `ask(query, trace=True)` zwraca `(answer_md, flow_trace_md)`.
+
+---
+
 ## Debug
 
 Workflow wypisuje `[DEBUG ...]` dla route_query, pre_retrieval, retrieval, check_and_refine, post_retrieval (wejście/wyjście, route, score, expanded_queries).

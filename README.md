@@ -37,6 +37,9 @@ python -c "from workflow import ask; print(ask('Jak zainstalować Docker?'))"
 # Uruchomienie z przykładowym pytaniem
 python workflow.py
 
+# Trace mode – generuje answer.md i flow_trace.md (opis krok po kroku, modele, liczba wywołań API)
+python workflow.py --trace -q "How to expose ports?" -o ./output
+
 # Testy (pełne – wymaga indeksu i API)
 python -m unittest discover tests -v
 

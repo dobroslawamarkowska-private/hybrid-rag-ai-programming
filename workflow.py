@@ -5,8 +5,10 @@ Advanced RAG LangGraph workflow following the diagram:
 Retrieval: orchestrator–workers pattern – równoległe workery dla każdego expanded query.
 """
 
+import argparse
+import operator
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import TypedDict
+from typing import Annotated, TypedDict
 
 from dotenv import load_dotenv
 
@@ -18,6 +20,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 
 from config import (
+    EMBEDDING_MODEL,
     GRADER_LLM_MODEL,
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
@@ -37,6 +40,8 @@ class RAGState(TypedDict, total=False):
     context: str
     answer: str
     retrieval_attempt: int
+    trace: bool
+    flow_log: Annotated[list[dict], operator.add]
 
 
 # --- Models ---
@@ -47,6 +52,13 @@ def _get_smart_llm():
         api_key=OPENROUTER_API_KEY,
         base_url=OPENROUTER_BASE_URL,
     )
+
+
+def _log(state: RAGState, node: str, model: str | None, calls: int, detail: str) -> dict:
+    """Append flow trace entry when trace=True."""
+    if not state.get("trace"):
+        return {}
+    return {"flow_log": [{"node": node, "model": model or "-", "calls": calls, "detail": detail}]}
 
 
 def _get_grader_llm():
@@ -110,7 +122,9 @@ def pre_retrieval(state: RAGState) -> dict:
     lines = [q.strip() for q in response.content.strip().split("\n") if q.strip()]
     queries = lines[:3] if lines else [state["query"]]
     print("[DEBUG pre_retrieval] OUT: expanded_queries =", queries)
-    return {"expanded_queries": queries}
+    out = {"expanded_queries": queries}
+    out.update(_log(state, "pre_retrieval", SMART_LLM_MODEL, 1, f"Expanded to {len(queries)} search queries"))
+    return out
 
 
 # --- Retrieval: Orchestrator–Workers (parallel embeddings + vector search) ---
@@ -144,7 +158,9 @@ def retrieval(state: RAGState) -> dict:
 
     titles = [d.metadata.get("title", "?") for d in all_docs[:6]]
     print("[DEBUG retrieval] OUT: raw_docs count =", len(all_docs), "| titles (first 6) =", titles)
-    return {"raw_docs": all_docs}
+    out = {"raw_docs": all_docs}
+    out.update(_log(state, "retrieval", EMBEDDING_MODEL, len(queries), f"Vector search for {len(queries)} queries, {len(all_docs)} docs after dedup"))
+    return out
 
 
 # --- Check relevance & refine query if docs are bad (grader 0–1) ---
@@ -199,7 +215,9 @@ def check_and_refine_query(state: RAGState) -> dict:
 
     if not raw_docs or attempt >= 1:
         print("[DEBUG check_and_refine] OUT: docs_ok = True (no retry)")
-        return {"retrieval_attempt": 0}
+        out = {"retrieval_attempt": 0}
+        out.update(_log(state, "check_and_refine", None, 0, "Skipped (no docs or retry limit)"))
+        return out
 
     chunk_preview = "\n".join(
         f"- {d.metadata.get('title', '?')}: {d.page_content[:80]}..." for d in raw_docs[:3]
@@ -213,12 +231,16 @@ def check_and_refine_query(state: RAGState) -> dict:
 
     if docs_ok:
         print("[DEBUG check_and_refine] OUT: docs_ok = True | score =", score)
-        return {"retrieval_attempt": 0}
+        out = {"retrieval_attempt": 0}
+        out.update(_log(state, "check_and_refine", GRADER_LLM_MODEL, 1, f"Grader score {score} >= 0.5, docs OK"))
+        return out
 
     if not refined:
         refined = query
     print("[DEBUG check_and_refine] OUT: docs_ok = False | score =", score, "| refined_query =", repr(refined))
-    return {"query": refined, "retrieval_attempt": 1, "expanded_queries": [refined]}
+    out = {"query": refined, "retrieval_attempt": 1, "expanded_queries": [refined]}
+    out.update(_log(state, "check_and_refine", GRADER_LLM_MODEL, 1, f"Grader score {score} < 0.5, refined query for retry"))
+    return out
 
 
 def _route_after_check(state: RAGState) -> str:
@@ -238,7 +260,9 @@ def post_retrieval(state: RAGState) -> dict:
         f"[{i+1}] (from: {d.metadata.get('title', '?')})\n{d.page_content}" for i, d in enumerate(reranked[:6])
     )
     print("[DEBUG post_retrieval] OUT: reranked count =", len(reranked), "| context length =", len(context), "chars")
-    return {"reranked_docs": reranked, "context": context}
+    out = {"reranked_docs": reranked, "context": context}
+    out.update(_log(state, "post_retrieval", None, 0, f"Built context from {len(reranked)} chunks ({len(context)} chars)"))
+    return out
 
 
 # --- Generate: Frozen LLM ---
@@ -264,7 +288,9 @@ def generate(state: RAGState) -> dict:
     prompt = ChatPromptTemplate.from_messages([("human", GENERATE_PROMPT)])
     chain = prompt | llm
     response = chain.invoke({"context": state["context"], "query": state["query"]})
-    return {"answer": response.content}
+    out = {"answer": response.content}
+    out.update(_log(state, "generate", SMART_LLM_MODEL, 1, "Final answer generation"))
+    return out
 
 
 # --- Build graph ---
@@ -298,14 +324,94 @@ def get_rag_graph():
     return _graph
 
 
-def ask(query: str) -> str:
-    """Run the RAG workflow and return the answer."""
+def _format_answer_md(query: str, answer: str) -> str:
+    """Format answer as markdown document."""
+    return f"""# Answer
+
+**Query:** {query}
+
+---
+
+{answer}
+"""
+
+
+def _format_flow_trace_md(query: str, flow_log: list[dict]) -> str:
+    """Format flow trace as step-by-step markdown."""
+    lines = [
+        "# RAG Flow Trace",
+        "",
+        f"**Query:** {query}",
+        "",
+        "## Steps",
+        "",
+    ]
+    model_totals: dict[str, int] = {}
+    for i, entry in enumerate(flow_log, 1):
+        node = entry.get("node", "?")
+        model = entry.get("model", "-")
+        calls = entry.get("calls", 0)
+        detail = entry.get("detail", "")
+        lines.append(f"### Step {i}: {node}")
+        lines.append(f"- **Model:** {model}")
+        lines.append(f"- **API calls:** {calls}")
+        lines.append(f"- **Detail:** {detail}")
+        lines.append("")
+        if model and model != "-" and calls > 0:
+            model_totals[model] = model_totals.get(model, 0) + calls
+
+    lines.append("## Model Call Summary")
+    lines.append("")
+    for model, total in sorted(model_totals.items()):
+        lines.append(f"- **{model}:** {total} call(s)")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def ask(query: str, trace: bool = False) -> str | tuple[str, str]:
+    """
+    Run the RAG workflow and return the answer.
+    When trace=True, returns (answer_md, flow_trace_md) – two markdown documents.
+    """
     graph = get_rag_graph()
-    result = graph.invoke({"query": query})
-    return result.get("answer", "")
+    initial_state: RAGState = {"query": query, "trace": trace}
+    if trace:
+        initial_state["flow_log"] = []
+    result = graph.invoke(initial_state)
+    answer = result.get("answer", "")
+
+    if not trace:
+        return answer
+
+    flow_log = result.get("flow_log") or []
+    answer_md = _format_answer_md(query, answer)
+    flow_md = _format_flow_trace_md(query, flow_log)
+    return answer_md, flow_md
 
 
 if __name__ == "__main__":
-    q = "How can I persist data in Docker containers?"
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--trace", action="store_true", help="Generate answer + flow trace as two markdown docs")
+    parser.add_argument("--query", "-q", default="How can I persist data in Docker containers?", help="Query to ask")
+    parser.add_argument("--out-dir", "-o", help="Output directory for answer.md and flow_trace.md (requires --trace)")
+    args = parser.parse_args()
+
+    q = args.query
     print("Query:", q)
-    print("\nAnswer:\n", ask(q))
+
+    if args.trace:
+        answer_md, flow_md = ask(q, trace=True)
+        if args.out_dir:
+            import os
+            os.makedirs(args.out_dir, exist_ok=True)
+            with open(os.path.join(args.out_dir, "answer.md"), "w", encoding="utf-8") as f:
+                f.write(answer_md)
+            with open(os.path.join(args.out_dir, "flow_trace.md"), "w", encoding="utf-8") as f:
+                f.write(flow_md)
+            print(f"\nSaved to {args.out_dir}/answer.md and {args.out_dir}/flow_trace.md")
+        else:
+            print("\n--- Answer (MD) ---\n", answer_md)
+            print("\n--- Flow Trace (MD) ---\n", flow_md)
+    else:
+        print("\nAnswer:\n", ask(q))
