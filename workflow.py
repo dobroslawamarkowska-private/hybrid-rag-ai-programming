@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 load_dotenv(override=True)  # przed importem LangChain (LangSmith observability)
 
 from langchain_core.documents import Document
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, SystemMessage
 from langchain_core.messages.utils import count_tokens_approximately, trim_messages
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
@@ -36,6 +36,7 @@ from retriever import get_retriever
 
 # --- State ---
 MAX_CONTENT_TOKENS = 4096  # max tokenów dla rozmowy (Summarize messages pattern)
+MAX_MESSAGES_BEFORE_SUMMARY = 1500  # po ile tokenach w messages uruchamiamy summarization
 
 class RAGState(TypedDict, total=False):
     query: str
@@ -49,6 +50,7 @@ class RAGState(TypedDict, total=False):
     trace: bool
     flow_log: Annotated[list[dict], operator.add]
     messages: Annotated[list, add_messages]
+    summary: str  # Summarize messages: skrót starszej części rozmowy
 
 
 # --- Models ---
@@ -282,7 +284,47 @@ def post_retrieval(state: RAGState) -> dict:
     return out
 
 
-# --- Generate: Frozen LLM (Summarize messages: max 4096 tokenów) ---
+# --- Summarize messages (LangChain pattern: https://docs.langchain.com/oss/python/langgraph/add-memory#summarize-messages) ---
+SUMMARIZE_PROMPT_NEW = "Create a concise summary of the conversation above. Preserve key facts, decisions, and context relevant for continuing the dialogue."
+SUMMARIZE_PROMPT_EXTEND = "This is a summary of the conversation to date: {summary}\n\nExtend the summary by taking into account the new messages above. Keep it concise."
+
+
+def summarize_conversation(state: RAGState) -> dict:
+    """
+    Summarize messages: gdy rozmowa przekracza MAX_MESSAGES_BEFORE_SUMMARY tokenów,
+    LLM podsumowuje starsze wiadomości; ReplaceMessage usuwa je, zostają ostatnie 2.
+    """
+    messages = state.get("messages") or []
+    if len(messages) <= 2:
+        return {}
+
+    msg_tokens = count_tokens_approximately(messages)
+    if msg_tokens <= MAX_MESSAGES_BEFORE_SUMMARY:
+        return {}
+
+    summary = state.get("summary", "")
+    llm = _get_smart_llm().bind(max_tokens=256)
+
+    if summary:
+        prompt = SUMMARIZE_PROMPT_EXTEND.format(summary=summary)
+    else:
+        prompt = SUMMARIZE_PROMPT_NEW
+
+    summary_message = HumanMessage(content=prompt)
+    to_summarize = messages + [summary_message]
+    response = llm.invoke(to_summarize)
+    new_summary = response.content if response.content else summary
+
+    # Usuń wszystkie oprócz ostatnich 2 (add_messages + RemoveMessage)
+    to_remove = messages[:-2]
+    remove_ops = [RemoveMessage(id=m.id) for m in to_remove if getattr(m, "id", None)]
+
+    out = {"summary": new_summary, "messages": remove_ops}
+    out.update(_log(state, "summarize_conversation", SMART_LLM_MODEL, 1, f"Summarized {len(to_remove)} messages"))
+    return out
+
+
+# --- Generate: Frozen LLM (context + summary + messages, max 4096 tokenów) ---
 GENERATE_SYSTEM = """You are a helpful Docker documentation assistant. Answer the user's question based ONLY on the provided context.
 
 If the context does NOT contain the exact information asked for:
@@ -293,12 +335,16 @@ If the context contains relevant information, answer concisely and technically."
 
 
 def generate(state: RAGState) -> dict:
-    """Generate final answer. Trims context + messages to MAX_CONTENT_TOKENS (Summarize messages)."""
+    """Generate final answer. Uses summary (Summarize messages) + messages. Trim do MAX_CONTENT_TOKENS fallback."""
     llm = _get_smart_llm()
     context = state.get("context", "")
+    summary = state.get("summary", "")
     messages = state.get("messages") or []
 
     system_content = f"{GENERATE_SYSTEM}\n\nContext:\n{context}"
+    if summary:
+        system_content = f"{system_content}\n\n## Conversation summary (earlier turns):\n{summary}"
+
     full_messages = [SystemMessage(content=system_content), *messages]
     trimmed = trim_messages(
         full_messages,
@@ -311,7 +357,7 @@ def generate(state: RAGState) -> dict:
     )
     response = llm.invoke(trimmed)
     out = {"answer": response.content, "messages": [response]}
-    out.update(_log(state, "generate", SMART_LLM_MODEL, 1, f"Final answer (trimmed to {MAX_CONTENT_TOKENS} tokens)"))
+    out.update(_log(state, "generate", SMART_LLM_MODEL, 1, f"Final answer (max {MAX_CONTENT_TOKENS} tokens)"))
     return out
 
 
@@ -324,6 +370,7 @@ def build_rag_graph():
     builder.add_node("retrieval", retrieval)
     builder.add_node("check_and_refine", check_and_refine_query)
     builder.add_node("post_retrieval", post_retrieval)
+    builder.add_node("summarize_conversation", summarize_conversation)
     builder.add_node("generate", generate)
 
     builder.add_edge(START, "ingest")
@@ -331,7 +378,8 @@ def build_rag_graph():
     builder.add_edge("pre_retrieval", "retrieval")
     builder.add_edge("retrieval", "check_and_refine")
     builder.add_conditional_edges("check_and_refine", _route_after_check, ["retrieval", "post_retrieval"])
-    builder.add_edge("post_retrieval", "generate")
+    builder.add_edge("post_retrieval", "summarize_conversation")
+    builder.add_edge("summarize_conversation", "generate")
     builder.add_edge("generate", END)
 
     checkpointer = InMemorySaver()

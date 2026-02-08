@@ -21,7 +21,7 @@ class TestRAGWorkflow(unittest.TestCase):
     def test_graph_has_expected_nodes(self):
         graph = build_rag_graph()
         nodes = set(graph.nodes.keys())
-        expected = {"ingest", "pre_retrieval", "retrieval", "check_and_refine", "post_retrieval", "generate"}
+        expected = {"ingest", "pre_retrieval", "retrieval", "check_and_refine", "post_retrieval", "summarize_conversation", "generate"}
         self.assertTrue(expected.issubset(nodes), f"Oczekiwane nodesy: {expected}, jest: {nodes}")
 
     @unittest.skipIf(SKIP_INTEGRATION, "SKIP_INTEGRATION=1")
