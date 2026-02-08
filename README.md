@@ -61,6 +61,24 @@ Sync forka z repo Marcina **zawsze tylko** do brancha `marcin_main`:
 
 Szczegółowy opis przepływu, diagramy i konfiguracja – zobacz [docs/ADVANCED_RAG.md](docs/ADVANCED_RAG.md).
 
+## Ewaluacja (LangSmith)
+
+Na branchu `langsmith-eval` dostępne są skrypty do ewaluacji RAG:
+
+1. **Tworzenie datasetu testowego** – pytania o dokumentację Docker + oczekiwane słowa kluczowe:
+   ```bash
+   python eval_dataset.py
+   ```
+
+2. **Uruchomienie ewaluacji** – uruchamia workflow na datasetcie i ocenia wyniki:
+   ```bash
+   python eval_rag.py
+   ```
+
+Wymagane: `LANGSMITH_API_KEY` lub `LANGCHAIN_API_KEY` w `.env`. Wyniki w [smith.langchain.com](https://smith.langchain.com).
+
+---
+
 ## Struktura projektu
 
 | Plik / katalog | Opis |
@@ -71,5 +89,7 @@ Szczegółowy opis przepływu, diagramy i konfiguracja – zobacz [docs/ADVANCED
 | `build_index.py` | Budowanie indeksu wektorowego z dokumentacji Docker |
 | `retriever.py` | Retriever i tool do wyszukiwania w dokumentacji |
 | `workflow.py` | LangGraph workflow RAG |
+| `eval_dataset.py` | Tworzenie datasetu testowego (LangSmith, branch langsmith-eval) |
+| `eval_rag.py` | Ewaluacja RAG przez LangSmith Client (branch langsmith-eval) |
 | `tests/` | Testy retrievera i workflow |
 | `docs/ADVANCED_RAG.md` | Pełna dokumentacja architektury |
