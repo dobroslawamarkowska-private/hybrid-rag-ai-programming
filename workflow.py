@@ -221,7 +221,8 @@ def check_and_refine_query(state: RAGState) -> dict:
     if not raw_docs or attempt >= 1:
         print("[DEBUG check_and_refine] OUT: docs_ok = True (no retry)")
         out = {"retrieval_attempt": 0}
-        out.update(_log(state, "check_and_refine", None, 0, "Skipped (no docs or retry limit)"))
+        detail = "Skipped (no docs)" if not raw_docs else "Skipped (retry limit reached, passing to post_retrieval)"
+        out.update(_log(state, "check_and_refine", None, 0, detail))
         return out
 
     chunk_preview = "\n".join(
@@ -243,7 +244,8 @@ def check_and_refine_query(state: RAGState) -> dict:
     if not refined:
         refined = query
     print("[DEBUG check_and_refine] OUT: docs_ok = False | score =", score, "| refined_query =", repr(refined))
-    out = {"query": refined, "retrieval_attempt": 1, "expanded_queries": [refined]}
+    # Keep original query – retrieval uses expanded_queries, generate must answer the original user question
+    out = {"retrieval_attempt": 1, "expanded_queries": [refined]}
     out.update(_log(state, "check_and_refine", GRADER_LLM_MODEL, 1, f"Grader score {score} < 0.5, refined query for retry"))
     return out
 

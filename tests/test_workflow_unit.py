@@ -12,6 +12,7 @@ from langchain_core.documents import Document
 from workflow import (
     _parse_grader_response,
     _route_after_check,
+    check_and_refine_query,
     post_retrieval,
     retrieval,
     RAGState,
@@ -70,6 +71,47 @@ class TestParseGraderResponse(unittest.TestCase):
         score, refined = _parse_grader_response(text)
         self.assertEqual(score, 0.6)
         self.assertEqual(refined, "trimmed")
+
+
+class TestCheckAndRefine(unittest.TestCase):
+    """Test check_and_refine – zachowanie przy refinement."""
+
+    def test_refine_preserves_original_query(self):
+        """Przy refinemenci nie nadpisujemy query – generate odpowiada na oryginalne pytanie."""
+        state: RAGState = {
+            "query": "How to install Docker Hub on Linux?",
+            "raw_docs": [Document(page_content="x" * 100, metadata={"title": "Doc"})],
+            "retrieval_attempt": 0,
+        }
+        fake_response = MagicMock(content="SCORE: 0.35\nREFINED: How to sign in to Docker Hub?")
+        fake_chain = MagicMock()
+        fake_chain.invoke = MagicMock(return_value=fake_response)
+        mock_prompt_instance = MagicMock()
+        mock_prompt_instance.__or__ = MagicMock(return_value=fake_chain)
+        with patch("workflow.ChatPromptTemplate") as MockPrompt:
+            MockPrompt.from_messages.return_value = mock_prompt_instance
+            out = check_and_refine_query(state)
+        self.assertIn("expanded_queries", out)
+        self.assertEqual(out["expanded_queries"], ["How to sign in to Docker Hub?"])
+        self.assertEqual(out["retrieval_attempt"], 1)
+        self.assertNotIn("query", out, "query must not be overwritten – generate needs original")
+
+    def test_skip_no_docs_detail(self):
+        """Skipped (no docs) gdy brak raw_docs."""
+        state: RAGState = {"query": "q", "raw_docs": [], "retrieval_attempt": 0, "trace": True}
+        out = check_and_refine_query(state)
+        self.assertEqual(out["flow_log"][0]["detail"], "Skipped (no docs)")
+
+    def test_skip_retry_limit_detail(self):
+        """Skipped (retry limit reached) gdy attempt >= 1."""
+        state: RAGState = {
+            "query": "q",
+            "raw_docs": [Document(page_content="x", metadata={"title": "T"})],
+            "retrieval_attempt": 1,
+            "trace": True,
+        }
+        out = check_and_refine_query(state)
+        self.assertIn("retry limit reached", out["flow_log"][0]["detail"])
 
 
 class TestRouteAfterCheck(unittest.TestCase):

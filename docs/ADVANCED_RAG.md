@@ -157,6 +157,7 @@ Decyzja o jakości dokumentów:
 3. **Próg** `RELEVANCE_THRESHOLD = 0.5`:
    - score ≥ 0.50 → dalej do post_retrieval,
    - score < 0.50 → retry retrieval z refined query (max 1 retry).
+4. **Oryginalne pytanie**: Przy refinemenci nie nadpisujemy `query` – retrieval używa `expanded_queries` (refined), a generate odpowiada na **oryginalne** pytanie użytkownika. Zapobiega to błędnym odpowiedziom na inne pytanie (np. refined: „sign in” vs oryginał: „install”).
 
 ---
 
