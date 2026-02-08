@@ -13,3 +13,5 @@ htmlcov/
 dist/
 build/
 .DS_Store
+trace_output
+output

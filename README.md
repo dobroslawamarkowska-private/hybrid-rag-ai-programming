@@ -37,6 +37,9 @@ python -c "from workflow import ask; print(ask('Jak zainstalować Docker?'))"
 # Uruchomienie z przykładowym pytaniem
 python workflow.py
 
+# Trace mode – generuje answer.md i flow_trace.md (opis krok po kroku, modele, liczba wywołań API)
+python workflow.py --trace -q "How to expose ports?" -o ./output
+
 # Testy (pełne – wymaga indeksu i API)
 python -m unittest discover tests -v
 
@@ -58,6 +61,23 @@ Sync forka z repo Marcina **zawsze tylko** do brancha `marcin_main`:
 
 Szczegółowy opis przepływu, diagramy i konfiguracja – zobacz [docs/ADVANCED_RAG.md](docs/ADVANCED_RAG.md).
 
+## Ewaluacja (LangSmith, branch langsmith-eval)
+
+1. **Tworzenie datasetu** – 8 pytań + expected_keywords + expected_answer:
+   ```bash
+   python eval_dataset.py
+   ```
+
+2. **Uruchomienie ewaluacji**:
+   ```bash
+   python eval_rag.py                    # answer_not_empty, expected_keywords (0 tokenów na eval)
+   python eval_rag.py --llm-judge        # + qa_correctness (LLM-as-judge, dodatkowe wywołania LLM)
+   ```
+
+Dataset zawiera expected_answer dla wszystkich przykładów. Ewaluacja po keywords jest tańsza (bez dodatkowych LLM); `--llm-judge` daje ocenę semantyczną. Wymagane: `LANGSMITH_API_KEY` w `.env`.
+
+---
+
 ## Struktura projektu
 
 | Plik / katalog | Opis |
@@ -68,5 +88,7 @@ Szczegółowy opis przepływu, diagramy i konfiguracja – zobacz [docs/ADVANCED
 | `build_index.py` | Budowanie indeksu wektorowego z dokumentacji Docker |
 | `retriever.py` | Retriever i tool do wyszukiwania w dokumentacji |
 | `workflow.py` | LangGraph workflow RAG |
+| `eval_dataset.py` | Tworzenie datasetu testowego (LangSmith, branch langsmith-eval) |
+| `eval_rag.py` | Ewaluacja RAG przez LangSmith Client (branch langsmith-eval) |
 | `tests/` | Testy retrievera i workflow |
 | `docs/ADVANCED_RAG.md` | Pełna dokumentacja architektury |
