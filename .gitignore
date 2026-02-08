@@ -13,7 +13,5 @@ htmlcov/
 dist/
 build/
 .DS_Store
-.cursor/
-.vscode/
 trace_output
 output
