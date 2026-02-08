@@ -17,9 +17,9 @@ source venv/bin/activate   # Linux/macOS
 # venv\Scripts\activate    # Windows
 
 # Zależności
-pip install -r req.txt
+pip install -r requirements.txt
 
-# Konfiguracja – utwórz plik .env
+# Konfiguracja – skopiuj .env.example do .env i uzupełnij
 # OPENROUTER_API_KEY=sk-or-v1-...
 # OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 # Dla LangSmith: LANGSMITH_TRACING=true, LANGSMITH_API_KEY, LANGSMITH_PROJECT
@@ -44,6 +44,16 @@ python -m unittest discover tests -v
 SKIP_INTEGRATION=1 python -m unittest discover tests -v
 ```
 
+## Fork – synchronizacja z upstream
+
+Sync forka z repo Marcina **zawsze tylko** do brancha `marcin_main`:
+
+```bash
+./sync-fork.sh
+```
+
+(lub ręcznie: `git fetch upstream && git checkout marcin_main && git merge upstream/main && git push origin marcin_main`)
+
 ## Architektura
 
 Szczegółowy opis przepływu, diagramy i konfiguracja – zobacz [docs/ADVANCED_RAG.md](docs/ADVANCED_RAG.md).
@@ -52,7 +62,9 @@ Szczegółowy opis przepływu, diagramy i konfiguracja – zobacz [docs/ADVANCED
 
 | Plik / katalog | Opis |
 |----------------|------|
-| `config.py` | Konfiguracja: ścieżki Chroma, modele |
+| `.env.example` | Szablon zmiennych środowiskowych |
+| `sync-fork.sh` | Sync forka z upstream → zawsze do brancha `marcin_main` |
+| `config.py` | Konfiguracja: ścieżki Chroma, modele LLM |
 | `build_index.py` | Budowanie indeksu wektorowego z dokumentacji Docker |
 | `retriever.py` | Retriever i tool do wyszukiwania w dokumentacji |
 | `workflow.py` | LangGraph workflow RAG |
