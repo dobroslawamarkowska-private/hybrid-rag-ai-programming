@@ -1,6 +1,6 @@
 # Hybrid RAG – AI Programming
 
-Advanced RAG (Retrieval Augmented Generation) pipeline dla dokumentacji Docker. Zbudowany w **LangGraph** z etapami: route (direct vs RAG), pre-retrieval, retrieval, grader + refinement, post-retrieval, generate.
+Advanced RAG (Retrieval Augmented Generation) pipeline dla dokumentacji Docker. Zbudowany w **LangGraph** z etapami: ingest (multi-turn), pre-retrieval, retrieval, grader + refinement, post-retrieval, summarize_conversation, generate. Wspiera pamięć rozmowy (add_messages) i summarization przy długich konwersacjach.
 
 ## Wymagania
 
@@ -31,8 +31,17 @@ pip install -r requirements.txt
 # Budowanie indeksu (jednorazowo; wymaga danych – parquet w ./data lub Kaggle)
 python build_index.py
 
-# Zapytanie
+# Zapytanie (pojedyncze)
 python -c "from workflow import ask; print(ask('Jak zainstalować Docker?'))"
+
+# Multi-turn – ta sama sesja (thread_id) zachowuje historię
+python -c "
+from workflow import ask
+# Pierwsza tura
+print(ask('Jak zainstalować Docker?', thread_id='user-123'))
+# Druga tura – asystent pamięta kontekst
+print(ask('A na Windows?', thread_id='user-123'))
+"
 
 # Uruchomienie z przykładowym pytaniem
 python workflow.py
@@ -61,6 +70,10 @@ Sync forka z repo Marcina **zawsze tylko** do brancha `marcin_main`:
 
 Szczegółowy opis przepływu, diagramy i konfiguracja – zobacz [docs/ADVANCED_RAG.md](docs/ADVANCED_RAG.md).
 
+### Multi-turn i Summarize messages
+
+Workflow używa **add_messages** (LangGraph) do pamięci rozmowy. Gdy `messages` przekraczają ~1500 tokenów, LLM podsumowuje starsze wiadomości (pattern [Summarize messages](https://docs.langchain.com/oss/python/langgraph/add-memory#summarize-messages)); generate dostaje `summary` + ostatnie `messages`. Stałe: `MAX_MESSAGES_BEFORE_SUMMARY`, `MAX_CONTENT_TOKENS` w `workflow.py`.
+
 ## Ewaluacja (LangSmith, branch langsmith-eval)
 
 1. **Tworzenie datasetu** – 8 pytań + expected_keywords + expected_answer:
@@ -87,7 +100,7 @@ Dataset zawiera expected_answer dla wszystkich przykładów. Ewaluacja po keywor
 | `config.py` | Konfiguracja: ścieżki Chroma, modele LLM |
 | `build_index.py` | Budowanie indeksu wektorowego z dokumentacji Docker |
 | `retriever.py` | Retriever i tool do wyszukiwania w dokumentacji |
-| `workflow.py` | LangGraph workflow RAG |
+| `workflow.py` | LangGraph workflow RAG (ingest → pre_retrieval → … → summarize_conversation → generate); multi-turn z `thread_id` |
 | `eval_dataset.py` | Tworzenie datasetu testowego (LangSmith, branch langsmith-eval) |
 | `eval_rag.py` | Ewaluacja RAG przez LangSmith Client (branch langsmith-eval) |
 | `tests/` | Testy retrievera i workflow |
