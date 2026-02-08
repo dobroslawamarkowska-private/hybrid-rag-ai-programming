@@ -7,7 +7,10 @@ from langchain_core.tools import create_retriever_tool
 from pydantic import BaseModel, Field
 from typing import Literal
 from langchain_core.messages import HumanMessage
+from langchain_core.messages.utils import trim_messages, count_tokens_approximately
 from langgraph.prebuilt import ToolNode, tools_condition
+
+MAX_CONTEXT_TOKENS = 1024
 
 
 def last_user_content(messages):
@@ -42,9 +45,14 @@ grader_model = ChatOpenAI(
 )
 
 def summarize_conversation(state: State):
-    messages = state["messages"] + [
-        HumanMessage(content=SUMMARY_PROMPT),
-    ]
+    messages = trim_messages(
+        state["messages"],
+        strategy="last",
+        token_counter=count_tokens_approximately,
+        max_tokens=MAX_CONTEXT_TOKENS,
+        start_on="human",
+        end_on=("human", "tool"),
+    ) + [HumanMessage(content=SUMMARY_PROMPT)]
     response = response_model.invoke(messages)
     return {"summary": response.content}
 
@@ -60,8 +68,17 @@ retriever_tool = create_retriever_tool(
 def generate_query_or_respond(state: MessagesState):
     """
     LLM decyduje: wywołać tool search_docker_docs (RAG) albo odpowiedzieć od razu.
+    Historia wiadomości jest przycinana, aby zmieścić się w limicie tokenów.
     """
-    response = response_model.bind_tools([retriever_tool]).invoke(state["messages"])
+    messages = trim_messages(
+        state["messages"],
+        strategy="last",
+        token_counter=count_tokens_approximately,
+        max_tokens=MAX_CONTEXT_TOKENS,
+        start_on="human",
+        end_on=("human", "tool"),
+    )
+    response = response_model.bind_tools([retriever_tool]).invoke(messages)
     return {"messages": [response]}
 
 GRADE_PROMPT = (
